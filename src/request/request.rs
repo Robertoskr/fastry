@@ -1,5 +1,9 @@
+use serde::Serialize;
+use serde_json::Value;
+use std::collections::HashMap;
+
 #[allow(dead_code)]
-#[derive(Debug, Clone)]
+#[derive(Serialize, Debug, Clone)]
 pub enum RequestMethod {
     GET,
     POST,
@@ -14,10 +18,34 @@ pub enum RequestMethod {
 pub struct Request {
     pub method: RequestMethod,
     pub http_version: String,
-    pub headers: String,
-    pub body: String,
+    pub raw_headers: String,
+    pub raw_body: String,
     pub path: String,
     pub raw_request: String,
+    pub json: Option<Value>,
+    pub headers: Option<HashMap<String, String>>,
+}
+
+#[derive(Serialize)]
+pub struct ProcessedRequest {
+    pub method: RequestMethod,
+    pub http_version: String,
+    pub json: Value,
+    pub headers: HashMap<String, String>,
+    pub text: String,
+}
+
+impl ProcessedRequest {
+    pub fn from_request(mut request: Request) -> Self {
+        request.process();
+        Self {
+            method: request.method,
+            http_version: request.http_version,
+            json: request.json.unwrap_or(Value::Null),
+            headers: request.headers.unwrap(),
+            text: request.raw_body,
+        }
+    }
 }
 
 impl Request {
@@ -27,10 +55,12 @@ impl Request {
         Self {
             method: method,
             http_version: http_version,
-            headers: Self::get_raw_headers(&as_str),
-            body: Self::get_raw_body(&as_str),
+            raw_headers: Self::get_raw_headers(&as_str),
+            raw_body: Self::get_raw_body(&as_str),
             path: path,
             raw_request: String::new(), //as_str.to_string(),
+            json: None,
+            headers: None,
         }
     }
 
@@ -72,7 +102,7 @@ impl Request {
         (method, path, http_version)
     }
 
-    //parses the raw request to get the raw headers
+    //parses the raw request to get the raw raw_headers
     fn get_raw_headers(request: &str) -> String {
         let start_idx = request.find("\r\n").unwrap();
         let end_idx = request.find("\r\n\r\n").unwrap();
@@ -86,13 +116,53 @@ impl Request {
         request[start_idx..].to_string()
     }
 
+    pub fn process(&mut self) {
+        //process the request for being passed to python
+        //first process the headers, and see the body type and lenght
+        let headers: HashMap<String, String>;
+
+        if self.headers.is_some() {
+            return;
+        }
+
+        headers = self.headers();
+
+        match headers
+            .get(&String::from("Content-Type"))
+            .unwrap_or(&String::from(""))
+            .as_str()
+        {
+            "application/json" => {
+                //parse the body with serde
+                let value: Value =
+                    serde_json::from_str(self.raw_body.as_str()).expect("Wrong json");
+                self.json = Some(value);
+            }
+            "application/xml" => {
+                //TODO: support xml parsing
+            }
+            _ => {}
+        }
+
+        self.headers = Some(headers);
+    }
+
     //TODO: get json and create json struct
     //todo get the json and return it
     //preferably do it in async way
     //async fn json() -> () {}
 
-    //TODO: get headers and create headers struct
+    //TODO: get raw_headers and create headers struct
     //todo get the headers of the request and return it
     //preferably do it in async way
-    //pub fn headers() -> () {}
+    pub fn headers(&self) -> HashMap<String, String> {
+        let mut headers = HashMap::<String, String>::new();
+        for line in self.raw_headers.split("\r\n") {
+            let (key, value) = line.split_once(':').unwrap();
+            let key = key.trim();
+            let value = value.trim();
+            headers.insert(key.to_string(), value.to_string());
+        }
+        headers
+    }
 }

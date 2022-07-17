@@ -2,12 +2,16 @@
 
 extern crate time;
 extern crate tokio;
+use crate::fs::DirEntry;
 use crate::tokio::io::AsyncReadExt;
 use crate::tokio::io::AsyncWriteExt;
 use pyo3::{prelude::*, types::PyModule};
-use std::collections::HashMap;
 use std::env;
+use std::fs;
+use std::io;
+use std::io::BufReader;
 use std::net::SocketAddr;
+use std::path::Path;
 
 use tokio::net::TcpListener;
 pub mod app;
@@ -26,9 +30,9 @@ async fn main() {
 
     //ensure python path is set to the correct value
 
-    //get all the routes of the app (from python app.py file)
-    let raw_routes: HashMap<String, String> =
-        get_routes("/Users/robertoskr/personalthings/opensource/fastry/test.py");
+    //get all the routes of the project
+    let project_path = "YOUR_ROUTE_PROJECT_HERE";
+    let raw_routes: Vec<(String, String)> = get_routes(project_path);
     //register all the routes
     app.register_routes(raw_routes);
 
@@ -40,9 +44,10 @@ async fn main() {
 
     loop {
         let (mut socket, _) = listener.accept().await.unwrap();
-
+        //clone the app to pass it to the thread
+        let mut app = app.clone();
         tokio::spawn(async move {
-            let mut buf = vec![0; 1024];
+            let mut buf = vec![0; 16364]; //16 bytes, should make this dynamic ?
 
             // In a loop, read data from the socket and write the data back.
             let n = socket.read(&mut buf).await.expect("");
@@ -52,56 +57,84 @@ async fn main() {
             }
 
             //process the request
-            let response = get_response(&buf[..n]);
+            let result: String = app.process_request(&buf[..n]);
 
             //write the reponse
             socket
-                .write_all(response.as_bytes())
+                .write_all(result.as_bytes())
                 .await
                 .expect("failed to write data to socket");
         });
     }
 }
 
-//this is one of the most important functions, it handles incoming requests and return valid http reponses
-pub fn get_response(buf: &[u8]) -> String {
-    //process the request and return a response
-
-    //parse the request to an structure
-    let _ = Request::from_bytes(buf);
-
-    //now that we determine the type of the request, get the handler,
-    //and determine if we want to do something with it
-
-    String::from("something")
+fn visit_dirs(
+    dir: &Path,
+    cb: &dyn Fn(&DirEntry, &mut Vec<(String, String)>),
+    container: &mut Vec<(String, String)>,
+) -> io::Result<()> {
+    if dir.is_dir() {
+        for entry in fs::read_dir(dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            let path_str = path.to_str().unwrap();
+            if path_str.find("venv").is_some() || path_str.find("target").is_some() {
+                continue;
+            }
+            if path.is_dir() {
+                visit_dirs(&path, cb, container)?;
+            } else {
+                cb(&entry, container);
+            }
+        }
+    }
+    Ok(())
 }
 
-pub fn get_handler(_: Python, _: String) -> Option<PyObject> {
-    //load the code
-    None
-    /*let module = PyModule::from_code(py, code.as_str(), "test.py", "test").unwrap();
-    let handler: PyObject = module.getattr("hello_world").unwrap().into();
-    let result: String = function
-        .call1(py, ("roberto",))
-        .unwrap()
-        .extract(py)
-        .unwrap();
-    println!("{}", result);
-    None*/
+fn visit_python_file(entry: &DirEntry, container: &mut Vec<(String, String)>) {
+    let path = entry.path();
+    let path = path.to_str().unwrap();
+    if path.find(".py").is_none() {
+        return;
+    }
+
+    let routes = get_routes_for_file(path);
+    for (path, fn_name) in routes {
+        container.push((path, fn_name));
+    }
 }
 
-pub fn get_routes(path: &str) -> HashMap<String, String> {
+fn get_routes(project_path: &str) -> Vec<(String, String)> {
+    let mut container: Vec<(String, String)> = Vec::new();
+    _ = visit_dirs(Path::new(project_path), &visit_python_file, &mut container);
+
+    container
+}
+
+pub fn get_routes_for_file(path: &str) -> Vec<(String, String)> {
     //get all the routes from the app base file
-    let mut file = File::open(path).unwrap();
-    let mut code = String::new();
-    _ = file.read_to_string(&mut code);
-
-    Python::with_gil(|py| {
-        let module = PyModule::from_code(py, code.as_str(), "app.py", "app").unwrap();
-        let app: PyObject = module.getattr("app").unwrap().into();
-        let result: PyObject = app.call_method0(py, "get_routes").unwrap();
-
-        let result = result.extract::<HashMap<String, String>>(py).unwrap();
-        return result;
-    })
+    let file = File::open(path).unwrap();
+    let reader = BufReader::new(file);
+    let mut last_path: Option<String> = None;
+    let mut routes: Vec<(String, String)> = Vec::new();
+    for line in reader.lines() {
+        let line = line.unwrap_or("".to_string());
+        if line.find("#->r").is_some() {
+            //this is a route function
+            let route_start = line.find('/').unwrap();
+            last_path = Some(line[route_start..].trim().to_string());
+            continue;
+        }
+        if line.trim() != "" && last_path.is_some() {
+            //get the name of the function
+            let (_, name) = line.split_once("def").unwrap();
+            routes.push((
+                last_path.unwrap(),
+                format!("{}::{}", path, name.split_once('(').unwrap().0.trim()).to_string(),
+            ));
+            last_path = None;
+            continue;
+        }
+    }
+    routes
 }

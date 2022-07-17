@@ -7,6 +7,8 @@ edition = "2021"
 
 [dependencies]
 tokio = {version = "1", features=["full"]}
-which = "4.2.5"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = { version = "1.0", default-features = false, features = ["alloc"] }
 pyo3 = { version = "0.16.5", features = ["full"] }
 time = "0.1"
+"pythonize" = "0.16.0"
