@@ -1,8 +1,8 @@
-extern crate pyo3;
-
-use pyo3::{prelude::*};
 use crate::request::ProcessedRequest;
+use crate::tokio::io::AsyncWriteExt;
 use crate::File;
+use crate::PyModule;
+use crate::PyObject;
 use crate::Python;
 use crate::Request;
 use pythonize::pythonize;
@@ -10,9 +10,8 @@ use serde::Serialize;
 use std::collections::HashMap;
 use std::io::Read;
 use std::time::Instant;
+use tokio::net::TcpStream;
 use std::sync::mpsc::Receiver;
-use std::net::TcpStream;
-use std::io::Write;
 
 #[allow(dead_code)]
 #[derive(Serialize, Debug, Clone)]
@@ -133,17 +132,18 @@ impl App {
     }
 
     pub fn start(&mut self, receiver: Receiver<(TcpStream, String)>){ 
+        let guard = Python::acquire_gil();
         loop { 
             let (mut socket, raw_request) = receiver.recv().unwrap();
-            unsafe { 
-                Python::with_gil_unchecked(|py| {
-                    let result = self.process_request(py, raw_request); 
+            let python = guard.python();
 
-                    //write the reponse
-                    socket.write_all(result.as_bytes()).unwrap();
-                    socket.flush().unwrap();
-                });
-            }
+            let result = self.process_request(python, raw_request); 
+
+            //write the reponse
+            socket
+                .write_all(result.as_bytes())
+                .await
+                .expect("failed to write data to socket");
         } 
     } 
 
@@ -153,6 +153,7 @@ impl App {
 
         //get the handler path
         let handler_path = self.resolve_route(request.path.as_str());
+        println!("{:?}", handler_path);
 
         match handler_path {
             Some(path) => {
@@ -164,31 +165,28 @@ impl App {
                 _ = file.read_to_string(&mut code);
                 let module = PyModule::from_code(py, code.as_str(), "app.py", "app").unwrap();
                 let handler: PyObject = module.getattr(fn_name).unwrap().into();
-                self.execute_request(&py, &handler, request).unwrap()
+                return self.execute_request(&py, &handler, request)
             }
             None => {
-                "".to_string()
+                //this is where we return a 404 not found error
             }
         }
+        format!(
+        "HTTP/1.1 200 OK\r\nDate: {:?}\r\nServer: Someserver\r\nContent-Length: 12\r\nContent-Type: text/html\r\nConnection: close\r\n\r\n\r\nHello world!",
+            Instant::now()
+        )
     }
 
-    fn execute_request(&self, py: &Python, handler: &PyObject, request: Request) -> PyResult<String> {
+    fn execute_request(&self, py: &Python, handler: &PyObject, request: Request) -> String {
         //process the headers and body
         let processed_request = ProcessedRequest::from_request(request);
 
         //send this request to the python handler
-        let res = handler.call1(*py,(
-            pythonize(*py, self).unwrap(),
-            pythonize(*py, &processed_request).unwrap()))?;
-        
-        let code: i32 = res.getattr(*py, "code")?.extract(*py)?;        
-        let _type: String = res.getattr(*py, "type")?.extract(*py)?;        
-        let body: String = res.getattr(*py, "body")?.extract(*py)?;        
-        
-        Ok(format!(
-            "HTTP/1.1 {} OK\r\nDate: {:?}\r\nServer: Someserver\r\nContent-Length: {}\r\nContent-Type: {}\r\nConnection: close\r\n\r\n\r\n{}", 
-            code, Instant::now(), body.len() + 2, _type, body, 
-        )) 
+        handler.call1( *py, (
+                pythonize(*py, self).unwrap(),
+                pythonize(*py, &processed_request).unwrap(),),)
+            .unwrap()
+            .extract::<String>(*py)
+            .unwrap()
     }
 }
-

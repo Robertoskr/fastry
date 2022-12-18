@@ -49,14 +49,14 @@ impl ProcessedRequest {
 }
 
 impl Request {
-    pub fn from_bytes(bytes: &[u8]) -> Self {
-        let as_str = std::str::from_utf8(&bytes).unwrap();
-        let (method, path, http_version) = Self::get_request_core_info(&as_str);
+
+    pub fn from_string(string: String)-> Self {
+        let (method, path, http_version) = Self::get_request_core_info(&string);
         Self {
             method: method,
             http_version: http_version,
-            raw_headers: Self::get_raw_headers(&as_str),
-            raw_body: Self::get_raw_body(&as_str),
+            raw_headers: Self::get_raw_headers(&string),
+            raw_body: Self::get_raw_body(&string),
             path: path,
             raw_request: String::new(), //as_str.to_string(),
             json: None,
