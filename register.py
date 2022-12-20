@@ -1,27 +1,29 @@
+import json as jsonParser
+import time 
+
 
 class HTTPResponse: 
-    def __init__(self, code: int, type: str, body: str): 
+    def __init__(self, code: int, type: str, body: str, headers: str): 
         self.code = code
         self.type = type 
         self.body = body
+        self.headers = headers
 
-    def to_dict(self) -> dict: 
-        return {
-            "code": self.code, 
-            "type": self.type, 
-            "body": self.body,
-        } 
+class JSONResponse(HTTPResponse): 
+    def __init__(
+        self, 
+        code: int = 200, 
+        json: dict = {}, 
+        headers: dict = {}
+    ): 
+        super().__init__(code=code, type="application/json", body=jsonParser.dumps(json), headers=jsonParser.dumps(headers))
 
-#->r /home
+#->r /
 def route(application, request):
-    return HTTPResponse(200, "application/json", '{"hola": "adios"}') 
+    time.sleep(1) 
+    return JSONResponse(json={"hola": "adios"})
 
+#->r /hola/<something>/adios
+def hola(application, request): 
+    return HTTPResponse(200, "text/html", "<h1 style='color:blue'>HOla</h1>", headers={})
 
-#->r /somenice/others
-def other_route(application, request):
-    print(application, request)
-
-
-#->r /some/route/hola
-def hola_handler(application, request):
-    print(application, request)

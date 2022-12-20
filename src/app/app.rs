@@ -38,6 +38,8 @@ impl RouteNode {
 pub struct App {
     raw_routes: HashMap<String, String>,
     routes_tree: Box<RouteNode>,
+    #[serde(skip)]
+    handlers: HashMap<(String, String), PyObject>,
 }
 
 impl App {
@@ -45,6 +47,7 @@ impl App {
         Self {
             raw_routes: HashMap::new(),
             routes_tree: Box::new(RouteNode::default()),
+            handlers: HashMap::new(), 
         }
     }
 
@@ -76,20 +79,28 @@ impl App {
 
     fn recursive_insert(raw_route: &str, raw_path: &str, tree: &mut Box<RouteNode>) {
         match raw_route.split_once('/') {
-            Some((left, right)) => match tree.childrens.get(left) {
-                Some(_) => {
-                    Self::recursive_insert(right, raw_path, tree.childrens.get_mut(left).unwrap());
-                }
-                None => {
-                    let mut node = RouteNode::default();
-                    node.path = Some(left.to_string());
-                    tree.childrens.insert(left.to_string(), Box::new(node));
-                    Self::recursive_insert(right, raw_path, tree.childrens.get_mut(left).unwrap());
+            Some((left, right)) => {
+                let left = if left.starts_with("<") { "CUSTOM_PARAM" } else { left } ;
+                if left == "" { 
+                    return Self::recursive_insert(right, raw_path, tree);
+                } 
+
+                match tree.childrens.get(left) {
+                    Some(_) => {
+                        Self::recursive_insert(right, raw_path, tree.childrens.get_mut(left).unwrap());
+                    }
+                    None => {
+                        let mut node = RouteNode::default();
+                        node.path = Some(left.to_string());
+                        tree.childrens.insert(left.to_string(), Box::new(node));
+                        Self::recursive_insert(right, raw_path, tree.childrens.get_mut(left).unwrap());
+                    }
                 }
             },
             None => {
                 //add the handler to the tree
                 //we are in the end of the path
+                let raw_route = if raw_route.starts_with("<") { "CUSTOM_PARAM" } else { raw_route } ;
                 match tree.childrens.get_mut(raw_route) {
                     Some(node) => {
                         node.handler = Some(raw_path.to_string());
@@ -114,23 +125,39 @@ impl App {
         };
 
         //try to resolve the route one by one
-        let mut actual_node = &self.routes_tree;
-        let as_list: Vec<String> = route.split('/').map(|p| p.to_string()).collect();
+        let mut actual_node = self.routes_tree.clone();
+        let mut as_list: Vec<String> = route.split('/').map(|p| p.to_string()).collect();
+        let _ =  as_list.remove(0);
         for (i, p) in as_list.iter().enumerate() {
-            match actual_node.childrens.get(p) {
-                Some(node) => {
+            match self.next_item_while_resolving(p, &actual_node, true) { 
+                Some(child_node) => { 
                     if i == as_list.len() - 1 {
-                        return node.handler.clone();
+                        return child_node.handler.clone();
                     }
-                    actual_node = node;
-                }
-                None => {
-                    break;
-                }
-            }
+                    actual_node = child_node;
+                },
+                None => (),
+            } 
+                 
         }
         None
     }
+    
+    fn next_item_while_resolving(&self, p: &str, node: &Box<RouteNode>, fallback: bool) -> Option<Box<RouteNode>> { 
+        match node.childrens.get(p) {
+            Some(children_node) => {
+                return Some(children_node.clone());
+            }
+            None => {
+                if fallback { 
+                    //this can be because the node is a custome thingy
+                    let p = "CUSTOM_PARAM"; 
+                    return self.next_item_while_resolving(p, node, false);
+                } 
+                None
+           }
+        }
+    } 
 
     pub fn start(&mut self, receiver: Receiver<(TcpStream, String)>){ 
         loop { 
@@ -148,22 +175,20 @@ impl App {
     } 
 
     pub fn process_request(&mut self, py: Python, raw_request: String)-> String {
-        //process a request
+        //parse the raw request string to a request
         let request = Request::from_string(raw_request);
 
         //get the handler path
         let handler_path = self.resolve_route(request.path.as_str());
 
+        //get the handler (python function that is going to handle the request !
+
         match handler_path {
             Some(path) => {
+                let handler = self.get_or_save_handler(py, path).unwrap();
                 //send the request to the handler and get the response
                 //handler not found yet, create find it.
-                let (file_name, fn_name) = path.split_once("::").unwrap();
-                let mut file = File::open(file_name).unwrap();
-                let mut code = String::new();
-                _ = file.read_to_string(&mut code);
-                let module = PyModule::from_code(py, code.as_str(), "app.py", "app").unwrap();
-                let handler: PyObject = module.getattr(fn_name).unwrap().into();
+                
                 self.execute_request(&py, &handler, request).unwrap()
             }
             None => {
@@ -171,6 +196,22 @@ impl App {
             }
         }
     }
+
+    fn get_or_save_handler(&mut self, py: Python ,path: String) -> Option<PyObject> { 
+        let (file_name, fn_name) = path.split_once("::").unwrap();
+        match self.handlers.get(&(file_name.to_string(), fn_name.to_string())) { 
+            Some(handler) => Some(handler.clone()), 
+            None => { 
+                let mut file = File::open(file_name).unwrap();
+                let mut code = String::new();
+                _ = file.read_to_string(&mut code);
+                let module = PyModule::from_code(py, code.as_str(), "app.py", "app").unwrap();
+                let handler: PyObject = module.getattr(fn_name).unwrap().into();
+                self.handlers.insert((file_name.to_string(), fn_name.to_string()), handler.clone());
+                Some(handler) 
+            } 
+        }  
+    } 
 
     fn execute_request(&self, py: &Python, handler: &PyObject, request: Request) -> PyResult<String> {
         //process the headers and body

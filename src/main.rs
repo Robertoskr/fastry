@@ -71,7 +71,7 @@ fn main() {
 
         //process the request
         worker.send((socket, request_str.to_string())).unwrap();
-        println!("Sent request to worker: {}", worker_id);
+        //println!("Sent request to worker: {}", worker_id);
         worker_id = worker_id + 1;
         if worker_id >= workers.len() { 
             worker_id = 0; 
