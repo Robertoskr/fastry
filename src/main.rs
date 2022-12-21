@@ -33,7 +33,8 @@ fn main() {
     //ensure python path is set to the correct value
 
     //get all the routes of the project
-    let project_path = "/Users/robertoskr/personalthings/opensource/fastry";
+    //TODO: move this to an env variable 
+    let project_path = "/Users/robertoskr/personalthings/opensource/fastry/project";
     let raw_routes: Vec<(String, String)> = get_routes(project_path);
     //register all the routes
     app.register_routes(raw_routes);
@@ -60,7 +61,8 @@ fn main() {
         let mut socket = stream.unwrap();
         //clone the app to pass it to the thread
         let worker = workers[worker_id].to_owned();
-
+        
+        //TODO: 16 bytes, we should make this dinamic ofc!
         let mut buffer = [0; 16384];
         //read the request data into the buffer
         let bytes_read = socket.read(&mut buffer).unwrap();

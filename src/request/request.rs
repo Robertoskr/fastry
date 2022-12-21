@@ -24,6 +24,7 @@ pub struct Request {
     pub raw_request: String,
     pub json: Option<Value>,
     pub headers: Option<HashMap<String, String>>,
+    pub path_variables: Option<HashMap<String, String>>,
 }
 
 #[derive(Serialize)]
@@ -32,6 +33,7 @@ pub struct ProcessedRequest {
     pub http_version: String,
     pub json: Value,
     pub headers: HashMap<String, String>,
+    pub path_variables: HashMap<String, String>,
     pub text: String,
 }
 
@@ -44,12 +46,12 @@ impl ProcessedRequest {
             json: request.json.unwrap_or(Value::Null),
             headers: request.headers.unwrap(),
             text: request.raw_body,
+            path_variables: request.path_variables.unwrap_or(HashMap::new())
         }
     }
 }
 
 impl Request {
-
     pub fn from_string(string: String)-> Self {
         let (method, path, http_version) = Self::get_request_core_info(&string);
         Self {
@@ -61,6 +63,7 @@ impl Request {
             raw_request: String::new(), //as_str.to_string(),
             json: None,
             headers: None,
+            path_variables: None, 
         }
     }
 

@@ -18,9 +18,6 @@ use std::io::Write;
 #[derive(Serialize, Debug, Clone)]
 struct RouteNode {
     path: Option<String>,
-    //sometimes, we change the path of the node, 
-    //so here we store the original path
-    original_path: Option<String>,
     handler: Option<String>,
     childrens: HashMap<String, Box<RouteNode>>,
     //TODO: add field for handling paths with custom variables
@@ -30,7 +27,6 @@ impl RouteNode {
     pub fn default() -> Self {
         Self {
             path: None,
-            original_path: None,
             handler: None,
             childrens: HashMap::new(),
         }
@@ -72,7 +68,6 @@ impl App {
                     //as this route does not have any param, we can safely store it in one time
                     let mut node = RouteNode::default();
                     node.path = Some(raw_route.to_string());
-                    node.original_path = Some(raw_route.to_string());
                     node.handler = Some(raw_path.to_string());
                     self.routes_tree
                         .childrens
@@ -85,7 +80,6 @@ impl App {
     fn recursive_insert(raw_route: &str, raw_path: &str, tree: &mut Box<RouteNode>) {
         match raw_route.split_once('/') {
             Some((left, right)) => {
-                let original_path = left.to_string();
                 let left = if left.starts_with("<") { "CUSTOM_PARAM" } else { left } ;
                 if left == "" { 
                     return Self::recursive_insert(right, raw_path, tree);
@@ -98,7 +92,6 @@ impl App {
                     None => {
                         let mut node = RouteNode::default();
                         node.path = Some(left.to_string());
-                        node.original_path = Some(original_path);
                         tree.childrens.insert(left.to_string(), Box::new(node));
                         Self::recursive_insert(right, raw_path, tree.childrens.get_mut(left).unwrap());
                     }
@@ -107,7 +100,6 @@ impl App {
             None => {
                 //add the handler to the tree
                 //we are in the end of the path
-                let original_path = raw_route.to_string();
                 let raw_route = if raw_route.starts_with("<") { "CUSTOM_PARAM" } else { raw_route } ;
                 match tree.childrens.get_mut(raw_route) {
                     Some(node) => {
@@ -116,7 +108,6 @@ impl App {
                     None => {
                         let mut node = RouteNode::default();
                         node.path = Some(raw_route.to_string());
-                        node.original_path = Some(original_path);
                         node.handler = Some(raw_path.to_string());
                         tree.childrens.insert(raw_route.to_string(), Box::new(node));
                     }
@@ -125,29 +116,13 @@ impl App {
         }
     }
 
-    pub fn resolve_route(&self, route: &str) -> (Option<String>, HashMap<String, String>) {
+    pub fn resolve_route(&self, route: &str) -> Option<(String, HashMap<String, String>)> {
         //resolve the route, returning the the path of the handler
         //try to resolve the whole route first
-        let mut path_variables = HashMap::new(); 
-
         match self.routes_tree.childrens.get(route) {
-            Some(node) => return (node.handler.clone(), path_variables),
+            Some(node) => return node.handler.clone(),
             None => (),
         };
-        
-        let (route, route_variables) = match route.split_once('?') { 
-            Some(split) => split,
-            None => (route, "") 
-        };
-
-        for route_var in route_variables.split('&') { 
-            match route_var.split_once('=') { 
-                Some((key, value)) => { 
-                    path_variables.insert(key.to_string(), value.to_string());
-                },
-                None => ()
-            } 
-        } 
 
         //try to resolve the route one by one
         let mut actual_node = self.routes_tree.clone();
@@ -156,15 +131,8 @@ impl App {
         for (i, p) in as_list.iter().enumerate() {
             match self.next_item_while_resolving(p, &actual_node, true) { 
                 Some(child_node) => { 
-                    let child_clone = child_node.clone();
-                    if child_clone.path.unwrap() == "CUSTOM_PARAM"{ 
-                        path_variables.insert(
-                            child_clone.original_path.unwrap(),
-                            p.to_string(),
-                        );
-                    } 
                     if i == as_list.len() - 1 {
-                        return (child_node.handler.clone(), path_variables);
+                        return child_node.handler.clone();
                     }
                     actual_node = child_node;
                 },
@@ -172,7 +140,7 @@ impl App {
             } 
                  
         }
-        (None, path_variables) 
+        None
     }
     
     fn next_item_while_resolving(&self, p: &str, node: &Box<RouteNode>, fallback: bool) -> Option<Box<RouteNode>> { 
@@ -208,14 +176,14 @@ impl App {
 
     pub fn process_request(&mut self, py: Python, raw_request: String)-> String {
         //parse the raw request string to a request
-        let mut request = Request::from_string(raw_request);
+        let request = Request::from_string(raw_request);
 
         //get the handler path
-        let (maybe_path, route_variables) = self.resolve_route(request.path.as_str());
+        let routeInfo = self.resolve_route(request.path.as_str());
+
         //get the handler (python function that is going to handle the request !
-        match maybe_path{
-            Some(path) => {
-                request.path_variables = Some(route_variables);
+        match handler_path {
+            Some(path, route_variables) => {
                 let handler = self.get_or_save_handler(py, path).unwrap();
                 //send the request to the handler and get the response
                 //handler not found yet, create find it.
