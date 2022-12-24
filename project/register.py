@@ -1,28 +1,12 @@
 import time
-import json as jsonParser
-
-class HTTPResponse: 
-    def __init__(self, code: int, type: str, body: str, headers: str): 
-        self.code = code
-        self.type = type 
-        self.body = body
-        self.headers = headers
-
-class JSONResponse(HTTPResponse): 
-    def __init__(
-        self, 
-        code: int = 200, 
-        json: dict = {}, 
-        headers: dict = {}
-    ): 
-        super().__init__(code=code, type="application/json", body=jsonParser.dumps(json), headers=jsonParser.dumps(headers))
+import os
+from fastry import FastryApplication, HTTPResponse, JSONResponse
 
 #->r /
-def route(application, request):
-    time.sleep(1) 
+def route(application: FastryApplication, request: dict):
     return JSONResponse(json={"hola": "adios"})
 
 #->r /hola/<something>/<adios>/<hola>/hola
-def hola(application, request): 
+def hola(application: FastryApplication, request: dict): 
     return HTTPResponse(200, "text/html", "<h1 style='color:blue'>HOla</h1>", headers={})
 

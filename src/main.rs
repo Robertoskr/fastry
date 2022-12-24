@@ -2,8 +2,11 @@
 
 extern crate time;
 extern crate tokio;
+extern crate pyo3;
 use crate::fs::DirEntry;
 use pyo3::prelude::*;
+use pyo3::PyErr;
+use pyo3::types::PyList;
 use std::env;
 use std::fs;
 use std::io;
@@ -24,17 +27,14 @@ use std::net::{TcpListener, TcpStream};
 
 fn main() {
     let mut app = App::new();
-
-    //prepare python threads
-    pyo3::prepare_freethreaded_python();
-    //acquire the gil, that will be used in the threads!
-    let _ = Python::acquire_gil();
-
     //ensure python path is set to the correct value
 
     //get all the routes of the project
     //TODO: move this to an env variable 
     let project_path = "/Users/robertoskr/personalthings/opensource/fastry/project";
+
+    prepare_python_things(project_path).unwrap();
+
     let raw_routes: Vec<(String, String)> = get_routes(project_path);
     //register all the routes
     app.register_routes(raw_routes);
@@ -51,12 +51,11 @@ fn main() {
         let (tx, rx): (Sender<(TcpStream, String)>, Receiver<(TcpStream, String)>) = mpsc::channel();
         workers.push(tx);
         thread::spawn(move || {
-            worker.start(rx); 
+            worker.start(project_path.clone(), rx); 
         });
     } 
 
     let mut worker_id = 0;
-    
     for stream in listener.incoming() {
         let mut socket = stream.unwrap();
         //clone the app to pass it to the thread
@@ -151,3 +150,21 @@ pub fn get_routes_for_file(path: &str) -> Vec<(String, String)> {
     }
     routes
 }
+
+fn prepare_python_things(path: &str) -> Result<(), PyErr> { 
+    //prepare python threads
+    pyo3::prepare_freethreaded_python();
+    //acquire the gil, that will be used in the threads!
+    {
+        let gil = Python::acquire_gil();
+        let python = gil.python();
+
+        let syspath: &PyList = python
+            .import("sys")?
+            .getattr("path")?
+            .extract()?;
+    
+        syspath.insert(0, path)?;
+    }
+    Ok(()) 
+} 

@@ -44,6 +44,8 @@ pub struct App {
     routes_tree: Box<RouteNode>,
     #[serde(skip)]
     handlers: HashMap<(String, String), PyObject>,
+    #[serde(skip)] 
+    python_app: Option<PyObject>
 }
 
 impl App {
@@ -52,6 +54,7 @@ impl App {
             raw_routes: HashMap::new(),
             routes_tree: Box::new(RouteNode::default()),
             handlers: HashMap::new(), 
+            python_app: None, 
         }
     }
 
@@ -170,7 +173,6 @@ impl App {
                 },
                 None => (),
             } 
-                 
         }
         (None, path_variables) 
     }
@@ -191,7 +193,8 @@ impl App {
         }
     } 
 
-    pub fn start(&mut self, receiver: Receiver<(TcpStream, String)>){ 
+    pub fn start(&mut self, project_path: &str, receiver: Receiver<(TcpStream, String)>){ 
+        self.initialize_application(project_path);
         loop { 
             let (mut socket, raw_request) = receiver.recv().unwrap();
             unsafe { 
@@ -205,6 +208,7 @@ impl App {
             }
         } 
     } 
+
 
     pub fn process_request(&mut self, py: Python, raw_request: String)-> String {
         //parse the raw request string to a request
@@ -228,6 +232,22 @@ impl App {
         }
     }
 
+    fn initialize_application(&mut self, path: &str) {
+        let mut filename = path.to_string();
+        filename.push_str("/fastry.py");
+        let mut file = File::open(filename).unwrap();
+        let mut code = String::new();
+        file.read_to_string(&mut code).unwrap();
+        unsafe { 
+            Python::with_gil_unchecked(|py| {
+                let module = PyModule::from_code(py, code.as_str(), "project/fastry.py", "fastry").unwrap();
+                let application: PyObject = module.getattr("FastryApplication").unwrap().into();
+                let python_application: PyObject = application.call0(py).unwrap();
+                self.python_app = Some(python_application);
+            });
+        } 
+    } 
+
     fn get_or_save_handler(&mut self, py: Python ,path: String) -> Option<PyObject> { 
         let (file_name, fn_name) = path.split_once("::").unwrap();
         match self.handlers.get(&(file_name.to_string(), fn_name.to_string())) { 
@@ -236,7 +256,7 @@ impl App {
                 let mut file = File::open(file_name).unwrap();
                 let mut code = String::new();
                 _ = file.read_to_string(&mut code);
-                let module = PyModule::from_code(py, code.as_str(), "app.py", "app").unwrap();
+                let module = PyModule::from_code(py, code.as_str(), "project/app.py", "app").unwrap();
                 let handler: PyObject = module.getattr(fn_name).unwrap().into();
                 self.handlers.insert((file_name.to_string(), fn_name.to_string()), handler.clone());
                 Some(handler) 
@@ -250,8 +270,10 @@ impl App {
 
         //send this request to the python handler
         let res = handler.call1(*py,(
-            pythonize(*py, self).unwrap(),
-            pythonize(*py, &processed_request).unwrap()))?;
+            self.python_app.clone().unwrap(),
+            //convert to dict, the processed request
+            pythonize(*py, &processed_request).unwrap()
+        ))?;
         
         let code: i32 = res.getattr(*py, "code")?.extract(*py)?;        
         let _type: String = res.getattr(*py, "type")?.extract(*py)?;        
