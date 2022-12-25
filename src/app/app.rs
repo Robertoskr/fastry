@@ -233,17 +233,25 @@ impl App {
     }
 
     fn initialize_application(&mut self, path: &str) {
-        let mut filename = path.to_string();
-        filename.push_str("/fastry.py");
-        let mut file = File::open(filename).unwrap();
+        let mut file_name = path.to_string();
+        file_name.push_str("/fastry.py");
+        let mut file = File::open(file_name.clone()).unwrap();
         let mut code = String::new();
         file.read_to_string(&mut code).unwrap();
+        println!("{}", file_name);
         unsafe { 
             Python::with_gil_unchecked(|py| {
-                let module = PyModule::from_code(py, code.as_str(), "project/fastry.py", "fastry").unwrap();
-                let application: PyObject = module.getattr("FastryApplication").unwrap().into();
-                let python_application: PyObject = application.call0(py).unwrap();
-                self.python_app = Some(python_application);
+                let res = PyModule::from_code(py, code.as_str(), file_name.as_str(), path);
+                match res { 
+                    Ok(module) => { 
+                        let application: PyObject = module.getattr("FastryApplication").unwrap().into();
+                        let python_application: PyObject = application.call0(py).unwrap();
+                        self.python_app = Some(python_application);
+                    },
+                    Err(traceback) => { 
+                        traceback.print(py);
+                    } 
+                } 
             });
         } 
     } 
@@ -269,20 +277,33 @@ impl App {
         let processed_request = ProcessedRequest::from_request(request);
 
         //send this request to the python handler
-        let res = handler.call1(*py,(
+        match handler.call1(*py,(
             self.python_app.clone().unwrap(),
             //convert to dict, the processed request
             pythonize(*py, &processed_request).unwrap()
-        ))?;
+        )) { 
+            Ok(res) => { 
+                let code: i32 = res.getattr(*py, "code")?.extract(*py)?;        
+                let _type: String = res.getattr(*py, "type")?.extract(*py)?;        
+                let body: String = res.getattr(*py, "body")?.extract(*py)?;        
         
-        let code: i32 = res.getattr(*py, "code")?.extract(*py)?;        
-        let _type: String = res.getattr(*py, "type")?.extract(*py)?;        
-        let body: String = res.getattr(*py, "body")?.extract(*py)?;        
+                Ok(format!(
+                    "HTTP/1.1 {} OK\r\nDate: {:?}\r\nServer: Someserver\r\nContent-Length: {}\r\nContent-Type: {}\r\nConnection: close\r\n\r\n\r\n{}", 
+                    code, Instant::now(), body.len() + 2, _type, body, 
+                )) 
+            },
+            Err(traceback) => { 
+                traceback.print(*py);
+                let code: i32 = 500;        
+                let _type: &str = "text/html";        
+                let body: &str = "";        
         
-        Ok(format!(
-            "HTTP/1.1 {} OK\r\nDate: {:?}\r\nServer: Someserver\r\nContent-Length: {}\r\nContent-Type: {}\r\nConnection: close\r\n\r\n\r\n{}", 
-            code, Instant::now(), body.len() + 2, _type, body, 
-        )) 
+                Ok(format!(
+                    "HTTP/1.1 {} OK\r\nDate: {:?}\r\nServer: Someserver\r\nContent-Length: {}\r\nContent-Type: {}\r\nConnection: close\r\n\r\n\r\n{}", 
+                    code, Instant::now(), body.len() + 2, _type, body, 
+                )) 
+            } 
+        } 
     }
 }
 

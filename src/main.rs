@@ -31,7 +31,7 @@ fn main() {
 
     //get all the routes of the project
     //TODO: move this to an env variable 
-    let project_path = "/Users/robertoskr/personalthings/opensource/fastry/project";
+    let project_path = "/Users/robertoskr/personalthings/website";
 
     prepare_python_things(project_path).unwrap();
 
@@ -160,12 +160,21 @@ fn prepare_python_things(path: &str) -> Result<(), PyErr> {
         let gil = Python::acquire_gil();
         let python = gil.python();
 
+        //lets change the current working directory for python 
+        let os = python.import("os")?;
+        os.call_method1("chdir", (path, ))?;
+
         let syspath: &PyList = python
             .import("sys")?
             .getattr("path")?
             .extract()?;
-    
-        syspath.insert(0, path)?;
+
+        syspath.append(path)?;
+
+        //add the venv to the syspath 
+        let mut venv_path = path.to_string();
+        venv_path.push_str("/venv/lib/python3.10/site-packages/");
+        syspath.append(venv_path)?;
     }
     Ok(()) 
 } 
