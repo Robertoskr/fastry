@@ -69,7 +69,7 @@ fn main() {
         };
 
         //process the request
-        match worker.send((Some(socket), request_str.to_string())) { 
+        match worker.send((socket, request_str.to_string())) { 
             Ok(_) => (), 
             Err(_) => { 
                 //remove the worker from the worker list 
@@ -82,10 +82,10 @@ fn main() {
         if now.duration_since(start_time).as_secs() > 60 { 
             let n_workers = workers.len();
             let ratio = request_counter as f64 / 60.0 / n_workers as f64;
-            if ratio > 5.0 { 
+            if ratio > 5 { 
                 //add more workers 
                 add_and_start_worker(&mut workers, project_path, &app); 
-            } else if ratio < 0.2 { 
+            } else if ratio < .2 { 
                 //remove some workers
                 remove_worker_try_stop(&mut workers, n_workers - 1);
             }
@@ -104,20 +104,18 @@ fn main() {
 }
 
 
-fn remove_worker_try_stop(workers: &mut Vec<Sender<(Option<TcpStream>, String)>>, idx: usize) { 
-    let worker = workers.remove(idx);
-    //TODO: we should send a signal to the tread an kill it
-    worker.send((None, String::new())).unwrap();
+fn remove_worker_try_stop(workers: &mut Vec<Sender<(TcpStream, String)>>, idx: usize) { 
+    workers.remove(idx);
 } 
 
-fn add_and_start_worker(workers: &mut Vec<Sender<(Option<TcpStream>, String)>>, project_path: &str, application: &App) { 
+fn add_and_start_worker(workers: &mut Vec<Sender<(TcpStream, String)>>, project_path: &str, application: &App) { 
     let mut worker = application.clone();
-    let (tx, rx): (Sender<(Option<TcpStream>, String)>, Receiver<(Option<TcpStream>, String)>) = mpsc::channel();
+    let (tx, rx): (Sender<(TcpStream, String)>, Receiver<(TcpStream, String)>) = mpsc::channel();
+    workers.push(tx);
     let clone = project_path.to_owned();
     thread::spawn(move || {
         worker.start(&clone, rx); 
     });
-    workers.push(tx);
 } 
 
 fn visit_dirs(

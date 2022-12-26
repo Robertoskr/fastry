@@ -193,19 +193,27 @@ impl App {
         }
     } 
 
-    pub fn start(&mut self, project_path: &str, receiver: Receiver<(TcpStream, String)>){ 
+    pub fn start(&mut self, project_path: &str, receiver: Receiver<(Option<TcpStream>, String)>){ 
         self.initialize_application(project_path);
         loop { 
-            let (mut socket, raw_request) = receiver.recv().unwrap();
-            unsafe { 
-                Python::with_gil_unchecked(|py| {
-                    let result = self.process_request(py, raw_request); 
+            let (socket, raw_request) = receiver.recv().unwrap();
+            match socket { 
+                None => { 
+                    //this will kill the thread
+                    break;
+                },
+                Some(mut socket) => { 
+                    unsafe { 
+                        Python::with_gil_unchecked(|py| {
+                            let result = self.process_request(py, raw_request); 
 
-                    //write the reponse
-                    socket.write_all(result.as_bytes()).unwrap();
-                    socket.flush().unwrap();
-                });
-            }
+                            //write the reponse
+                            socket.write_all(result.as_bytes()).unwrap();
+                            socket.flush().unwrap();
+                        });
+                    }
+                } 
+            } 
         } 
     } 
 
